@@ -31,4 +31,7 @@ export const env = {
     githubToken: require('GITHUB_TOKEN'),
     statusgatorToken: require('STATUSGATOR_API_TOKEN'),
   },
+
+  // JSON array of ServiceConfig — see config/services.ts
+  serviceMapJson: optional('SERVICE_MAP_JSON', ''),
 } as const;
