@@ -19,9 +19,8 @@ export const env = {
     serviceRoleKey: require('SUPABASE_SERVICE_ROLE_KEY'),
   },
 
-  anthropic: {
-    apiKey: require('ANTHROPIC_API_KEY'),
-  },
+  // Kimi K2 via HuggingFace Inference
+  hfToken: require('HF_TOKEN'),
 
   coral: {
     pagerdutyToken: require('PAGERDUTY_API_TOKEN'),
@@ -32,6 +31,5 @@ export const env = {
     statusgatorToken: require('STATUSGATOR_API_TOKEN'),
   },
 
-  // JSON array of ServiceConfig — see config/services.ts
   serviceMapJson: optional('SERVICE_MAP_JSON', ''),
 } as const;

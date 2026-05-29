@@ -1,4 +1,4 @@
-import { anthropic } from './anthropic.js';
+import { chatCompletion } from './llm.js';
 import { supabase } from './supabase.js';
 import { resolveGitHubRepo } from '../config/services.js';
 import {
@@ -16,16 +16,11 @@ import {
 import { SYSTEM_PROMPT, buildUserPrompt } from './prompts.js';
 import type { IncidentSummary } from '@sre/types';
 
-// ─── Main entry point ────────────────────────────────────────────────────────
-
 export async function runInvestigation(investigationId: string): Promise<void> {
   console.log(`[agent] starting investigation ${investigationId}`);
-
-  // Mark as running
   await setStatus(investigationId, 'running');
 
   try {
-    // 1. Load investigation + incident from Supabase
     const { data: investigation, error: invErr } = await supabase
       .from('investigations')
       .select('*, incidents(*)')
@@ -37,12 +32,9 @@ export async function runInvestigation(investigationId: string): Promise<void> {
     const incident = investigation.incidents as Record<string, unknown>;
     const pagerdutyId = String(incident.pagerduty_id);
     const serviceName = String(incident.service_name ?? '');
-
-    // 2. Resolve GitHub repo for this service
     const ghRepo = resolveGitHubRepo(serviceName);
 
-    // 3. Fetch from all 4 sources in parallel via Coral
-    console.log(`[agent] fetching from Coral sources for incident ${pagerdutyId}`);
+    console.log(`[agent] fetching Coral sources for incident ${pagerdutyId}`);
 
     const [
       incidentDetail,
@@ -63,7 +55,6 @@ export async function runInvestigation(investigationId: string): Promise<void> {
       fetchDatadogIncidents(),
       fetchThirdPartyIncidents(),
       fetchServiceComponentStatus(),
-      // GitHub queries only if we have a repo mapping
       ...(ghRepo
         ? [
             fetchRecentMergedPRs(ghRepo.owner, ghRepo.repo, 6),
@@ -72,7 +63,6 @@ export async function runInvestigation(investigationId: string): Promise<void> {
         : []),
     ]);
 
-    // Extract rows (settled promises, default to empty on rejection)
     const raw = {
       incident: extract(incidentDetail)?.[0] ?? incident,
       logEntries: extract(logEntries) ?? [],
@@ -86,13 +76,17 @@ export async function runInvestigation(investigationId: string): Promise<void> {
       failedWorkflows: ghRepo ? (extract(githubResults[1]) ?? []) : [],
     };
 
-    logRawSummary(raw);
+    console.log('[agent] coral data:', {
+      logEntries: raw.logEntries.length,
+      firingMonitors: raw.firingMonitors.length,
+      datadogEvents: raw.datadogEvents.length,
+      recentPRs: raw.recentPRs.length,
+      thirdPartyIncidents: raw.thirdPartyIncidents.length,
+    });
 
-    // 4. Call Claude with all collected data
-    console.log(`[agent] calling Claude for incident summary`);
+    console.log(`[agent] calling Kimi K2 for incident summary`);
     const summary = await generateSummary(raw);
 
-    // 5. Persist result
     await supabase
       .from('investigations')
       .update({
@@ -116,43 +110,32 @@ export async function runInvestigation(investigationId: string): Promise<void> {
       })
       .eq('id', investigationId);
 
-    console.log(`[agent] investigation ${investigationId} complete (confidence: ${summary.confidence})`);
+    console.log(`[agent] done (confidence: ${summary.confidence})`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`[agent] investigation ${investigationId} failed:`, message);
+    console.error(`[agent] failed:`, message);
     await setStatus(investigationId, 'failed', message);
   }
 }
 
-// ─── Claude call ─────────────────────────────────────────────────────────────
-
 async function generateSummary(raw: Parameters<typeof buildUserPrompt>[0]): Promise<IncidentSummary> {
-  const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 2048,
-    system: SYSTEM_PROMPT,
-    messages: [{ role: 'user', content: buildUserPrompt(raw) }],
+  const text = await chatCompletion({
+    messages: [
+      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'user', content: buildUserPrompt(raw) },
+    ],
+    maxTokens: 2048,
+    temperature: 0.1,
   });
 
-  const text = response.content
-    .filter((b) => b.type === 'text')
-    .map((b) => b.text)
-    .join('');
-
-  // Strip any accidental markdown fences
   const clean = text.replace(/^```json\s*/i, '').replace(/\s*```$/, '').trim();
 
-  let parsed: IncidentSummary;
   try {
-    parsed = JSON.parse(clean) as IncidentSummary;
+    return JSON.parse(clean) as IncidentSummary;
   } catch {
-    throw new Error(`Claude returned invalid JSON: ${clean.slice(0, 300)}`);
+    throw new Error(`Kimi K2 returned invalid JSON: ${clean.slice(0, 300)}`);
   }
-
-  return parsed;
 }
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 async function setStatus(
   id: string,
@@ -164,9 +147,7 @@ async function setStatus(
     .update({
       status,
       ...(error ? { error } : {}),
-      ...(status === 'complete' || status === 'failed'
-        ? { completed_at: new Date().toISOString() }
-        : {}),
+      ...(status !== 'running' ? { completed_at: new Date().toISOString() } : {}),
     })
     .eq('id', id);
 }
@@ -175,20 +156,8 @@ function extract(
   settled: PromiseSettledResult<{ rows: Record<string, unknown>[] }> | undefined
 ): Record<string, unknown>[] | null {
   if (!settled || settled.status === 'rejected') {
-    if (settled?.status === 'rejected') {
-      console.warn('[agent] coral query failed:', settled.reason);
-    }
+    if (settled?.status === 'rejected') console.warn('[agent] query failed:', settled.reason);
     return null;
   }
   return settled.value.rows;
-}
-
-function logRawSummary(raw: Record<string, unknown[]>): void {
-  console.log('[agent] coral data collected:', {
-    logEntries: raw.logEntries.length,
-    firingMonitors: raw.firingMonitors.length,
-    datadogEvents: raw.datadogEvents.length,
-    recentPRs: raw.recentPRs.length,
-    thirdPartyIncidents: raw.thirdPartyIncidents.length,
-  });
 }

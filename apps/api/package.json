@@ -13,7 +13,6 @@
   "dependencies": {
     "@sre/types": "workspace:*",
     "@supabase/supabase-js": "^2.43.0",
-    "@anthropic-ai/sdk": "^0.24.0",
     "@hono/node-server": "^1.12.0",
     "@hono/zod-validator": "^0.2.2",
     "hono": "^4.4.0",
