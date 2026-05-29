@@ -13,13 +13,13 @@ function optional(key: string, fallback: string): string {
 export const env = {
   port: Number(optional('PORT', '3001')),
   nodeEnv: optional('NODE_ENV', 'development'),
+  webOrigin: optional('WEB_ORIGIN', 'http://localhost:3000'),
 
   supabase: {
     url: require('SUPABASE_URL'),
     serviceRoleKey: require('SUPABASE_SERVICE_ROLE_KEY'),
   },
 
-  // Kimi K2 via HuggingFace Inference
   hfToken: require('HF_TOKEN'),
 
   coral: {

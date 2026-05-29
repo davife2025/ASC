@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 /**
- * Seed demo incidents + a completed investigation for showcase.
- * Usage: pnpm tsx scripts/seed-demo.ts
+ * Seeds demo incidents + one completed investigation.
+ * Usage: pnpm seed:demo  (from monorepo root)
  */
 
 import 'dotenv/config';
@@ -131,39 +131,35 @@ const demoSummary: IncidentSummary = {
 };
 
 async function seed() {
-  console.log('Seeding demo incidents...');
+  console.log('[seed] inserting demo incidents…');
 
+  // Upsert incidents (safe to re-run)
   const { data: insertedIncidents, error: incErr } = await supabase
     .from('incidents')
-    .upsert(incidents, { onConflict: 'pagerduty_id' })
+    .upsert(incidents, { onConflict: 'pagerduty_id', ignoreDuplicates: false })
     .select();
 
-  if (incErr) {
-    console.error('Failed to seed incidents:', incErr.message);
-    process.exit(1);
-  }
+  if (incErr) { console.error('[seed] incidents failed:', incErr.message); process.exit(1); }
+  console.log(`[seed] ✓ ${insertedIncidents?.length} incidents`);
 
-  console.log(`✓ Seeded ${insertedIncidents?.length} incidents`);
-
-  // Create a completed investigation for the first (critical) incident
   const criticalIncident = insertedIncidents?.find((i) => i.pagerduty_id === 'DEMO-001');
-  if (!criticalIncident) return;
+  if (!criticalIncident) { console.error('[seed] DEMO-001 not found'); process.exit(1); }
 
-  const { error: invErr } = await supabase.from('investigations').upsert(
-    {
-      incident_id: criticalIncident.id,
-      status: 'complete',
-      started_at: new Date(Date.now() - 24 * 60_000).toISOString(),
-      completed_at: new Date(Date.now() - 20 * 60_000).toISOString(),
-      summary: demoSummary,
-    },
-    { onConflict: 'incident_id' }
-  );
+  // Delete any existing investigation for this incident then re-insert
+  await supabase.from('investigations').delete().eq('incident_id', criticalIncident.id);
 
-  if (invErr) console.error('Failed to seed investigation:', invErr.message);
-  else console.log('✓ Seeded demo investigation with full summary');
+  const { error: invErr } = await supabase.from('investigations').insert({
+    incident_id: criticalIncident.id,
+    status: 'complete',
+    started_at: new Date(Date.now() - 24 * 60_000).toISOString(),
+    completed_at: new Date(Date.now() - 20 * 60_000).toISOString(),
+    summary: demoSummary,
+  });
 
-  console.log('\nDemo data ready. Start the app and visit http://localhost:3000');
+  if (invErr) { console.error('[seed] investigation failed:', invErr.message); process.exit(1); }
+
+  console.log('[seed] ✓ demo investigation with full summary');
+  console.log('\n[seed] done — visit http://localhost:3000');
 }
 
 seed();
