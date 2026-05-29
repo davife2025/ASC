@@ -2,6 +2,20 @@ import { spawn, type ChildProcess } from 'child_process';
 import { env } from '../config/env.js';
 import type { CoralQueryResult } from '@sre/types';
 
+/**
+ * Coral MCP client — communicates with `coral mcp-stdio` over JSON-RPC stdio.
+ *
+ * MCP tools exposed by Coral (from docs):
+ *   sql            — execute read-only SQL, returns rows as JSON
+ *   list_catalog   — list tables / table functions with pagination
+ *   search_catalog — regex search over catalog metadata
+ *   describe_table — compact metadata for one table
+ *   list_columns   — paginated columns for one table
+ *
+ * ⚠️  The tool name is "sql", NOT "query".
+ *     Using "query" causes a silent "unknown tool" error from the MCP server.
+ */
+
 interface JsonRpcRequest {
   jsonrpc: '2.0';
   id: number;
@@ -16,36 +30,47 @@ interface JsonRpcResponse {
   error?: { code: number; message: string };
 }
 
+// Shape returned by the Coral `sql` MCP tool
+interface CoralSqlResult {
+  content: Array<{ type: 'text'; text: string }>;
+  isError?: boolean;
+}
+
 class CoralClient {
   private process: ChildProcess | null = null;
   private buffer = '';
   private pending = new Map<
     number,
-    { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
+    {
+      resolve: (v: unknown) => void;
+      reject: (e: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
   >();
   private nextId = 1;
   private initialized = false;
-  // Single shared init promise — prevents concurrent connect() races
   private initPromise: Promise<void> | null = null;
 
   private sourceEnv(): NodeJS.ProcessEnv {
     return {
       ...process.env,
-      PAGERDUTY_API_TOKEN: env.coral.pagerdutyToken,
-      DD_API_KEY: env.coral.ddApiKey,
-      DD_APPLICATION_KEY: env.coral.ddAppKey,
-      DD_SITE: env.coral.ddSite,
-      GITHUB_TOKEN: env.coral.githubToken,
-      STATUSGATOR_API_TOKEN: env.coral.statusgatorToken,
+      // Source credentials read by Coral at query time from env
+      PAGERDUTY_API_TOKEN:    env.coral.pagerdutyToken,
+      DD_API_KEY:             env.coral.ddApiKey,
+      DD_APPLICATION_KEY:     env.coral.ddAppKey,
+      DD_SITE:                env.coral.ddSite,
+      GITHUB_TOKEN:           env.coral.githubToken,
+      STATUSGATOR_API_TOKEN:  env.coral.statusgatorToken,
+      // Persist Coral state across restarts (important in Docker)
+      ...(env.coralConfigDir ? { CORAL_CONFIG_DIR: env.coralConfigDir } : {}),
     };
   }
 
   connect(): Promise<void> {
     if (this.initialized) return Promise.resolve();
-    // Return existing init promise if already connecting (prevents race)
     if (this.initPromise) return this.initPromise;
+
     this.initPromise = this._connect().catch((err) => {
-      // Reset so next call retries from scratch
       this.initPromise = null;
       throw err;
     });
@@ -73,8 +98,8 @@ class CoralClient {
       console.error('[coral] process exited with code', code);
       this.initialized = false;
       this.initPromise = null;
-      // FIX: reject all pending promises so callers don't hang forever
-      const err = new Error(`Coral process exited unexpectedly (code ${code})`);
+      // Reject all pending so callers don't hang
+      const err = new Error(`Coral process exited (code ${code})`);
       for (const [id, handler] of this.pending) {
         clearTimeout(handler.timer);
         handler.reject(err);
@@ -89,13 +114,14 @@ class CoralClient {
       clientInfo: { name: 'sre-investigator', version: '0.1.0' },
     });
 
-    // MCP spec: send initialized notification after handshake completes
+    // Required by MCP spec after initialize resolves
     this.process.stdin!.write(
-      JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} }) + '\n'
+      JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} }) + '\n',
     );
 
-    // FIX: only set initialized AFTER handshake fully resolves
+    // Only mark initialized AFTER handshake fully completes
     this.initialized = true;
+    console.log('[coral] MCP connection established');
   }
 
   private flush(): void {
@@ -115,7 +141,7 @@ class CoralClient {
         if (msg.error) handler.reject(new Error(msg.error.message));
         else handler.resolve(msg.result);
       } catch {
-        // non-JSON stderr bleed
+        // non-JSON line (e.g. startup log)
       }
     }
   }
@@ -126,7 +152,6 @@ class CoralClient {
         reject(new Error('Coral process not started'));
         return;
       }
-
       const id = this.nextId++;
       const timer = setTimeout(() => {
         if (this.pending.has(id)) {
@@ -136,7 +161,6 @@ class CoralClient {
       }, 45_000);
 
       this.pending.set(id, { resolve, reject, timer });
-
       const req: JsonRpcRequest = { jsonrpc: '2.0', id, method, params };
       this.process.stdin!.write(JSON.stringify(req) + '\n');
     });
@@ -146,10 +170,17 @@ class CoralClient {
     await this.connect();
 
     const start = Date.now();
+
+    // ✅ CORRECT tool name: "sql" (not "query")
     const result = (await this.rpc('tools/call', {
-      name: 'query',
+      name: 'sql',
       arguments: { sql },
-    })) as { content: Array<{ type: string; text: string }> };
+    })) as CoralSqlResult;
+
+    if (result.isError) {
+      const errMsg = result.content.find((c) => c.type === 'text')?.text ?? 'Unknown Coral error';
+      throw new Error(`Coral SQL error: ${errMsg}`);
+    }
 
     const text = result.content.find((c) => c.type === 'text')?.text ?? '[]';
 
@@ -167,6 +198,23 @@ class CoralClient {
       row_count: rows.length,
       execution_ms: Date.now() - start,
     };
+  }
+
+  /** Use the list_catalog MCP tool for schema discovery (no raw SQL needed) */
+  async listCatalog(schema?: string): Promise<Array<{ schema: string; table: string; kind: string }>> {
+    await this.connect();
+
+    const result = (await this.rpc('tools/call', {
+      name: 'list_catalog',
+      arguments: { ...(schema ? { schema } : {}), limit: 200 },
+    })) as CoralSqlResult;
+
+    const text = result.content.find((c) => c.type === 'text')?.text ?? '[]';
+    try {
+      return JSON.parse(text) as Array<{ schema: string; table: string; kind: string }>;
+    } catch {
+      return [];
+    }
   }
 
   disconnect(): void {

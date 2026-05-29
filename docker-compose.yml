@@ -1,0 +1,66 @@
+version: '3.9'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    ports:
+      - '3001:3001'
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      WEB_ORIGIN: http://localhost:3000
+
+      # Supabase
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+
+      # HuggingFace (Kimi K2)
+      HF_TOKEN: ${HF_TOKEN}
+
+      # Coral sources (read by coral source add + at query time)
+      PAGERDUTY_API_TOKEN: ${PAGERDUTY_API_TOKEN}
+      DD_API_KEY: ${DD_API_KEY}
+      DD_APPLICATION_KEY: ${DD_APPLICATION_KEY}
+      DD_SITE: ${DD_SITE:-datadoghq.com}
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      STATUSGATOR_API_TOKEN: ${STATUSGATOR_API_TOKEN}
+
+      # Coral config dir — persists source registrations across container restarts
+      CORAL_CONFIG_DIR: /home/node/.coral
+
+      # Optional
+      PAGERDUTY_WEBHOOK_SECRET: ${PAGERDUTY_WEBHOOK_SECRET:-}
+      SERVICE_MAP_JSON: ${SERVICE_MAP_JSON:-}
+
+    volumes:
+      # Named volume so `coral source add` registrations survive restarts
+      - coral-config:/home/node/.coral
+
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://localhost:3001/api/health']
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    ports:
+      - '3000:3000'
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:3001
+      NEXT_PUBLIC_SUPABASE_URL: ${SUPABASE_URL}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  coral-config:
+    # Persists Coral source registrations + secrets between container restarts

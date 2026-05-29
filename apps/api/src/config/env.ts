@@ -23,16 +23,19 @@ export const env = {
   hfToken: require('HF_TOKEN'),
 
   coral: {
-    pagerdutyToken: require('PAGERDUTY_API_TOKEN'),
-    ddApiKey:       require('DD_API_KEY'),
-    ddAppKey:       require('DD_APPLICATION_KEY'),
-    ddSite:         optional('DD_SITE', 'datadoghq.com'),
-    githubToken:    require('GITHUB_TOKEN'),
+    pagerdutyToken:   require('PAGERDUTY_API_TOKEN'),
+    ddApiKey:         require('DD_API_KEY'),
+    ddAppKey:         require('DD_APPLICATION_KEY'),
+    ddSite:           optional('DD_SITE', 'datadoghq.com'),
+    githubToken:      require('GITHUB_TOKEN'),
     statusgatorToken: require('STATUSGATOR_API_TOKEN'),
   },
 
-  // Optional — if set, PagerDuty webhook signatures are verified
-  pagerdutyWebhookSecret: optional('PAGERDUTY_WEBHOOK_SECRET'),
+  // Where Coral stores source config + secrets.
+  // Set this in Docker so credentials persist across container restarts.
+  // Default: Coral uses its platform config dir (~/.config/coral on Linux).
+  coralConfigDir: optional('CORAL_CONFIG_DIR'),
 
-  serviceMapJson: optional('SERVICE_MAP_JSON'),
+  pagerdutyWebhookSecret: optional('PAGERDUTY_WEBHOOK_SECRET'),
+  serviceMapJson:         optional('SERVICE_MAP_JSON'),
 } as const;

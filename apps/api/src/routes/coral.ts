@@ -1,20 +1,24 @@
 import { Hono } from 'hono';
+import { zValidator } from '@hono/zod-validator';
+import { z } from 'zod';
 import { coral } from '../lib/coral.js';
 
 const router = new Hono();
 
 // ─── GET /coral/health ───────────────────────────────────────────────────────
+// Uses list_catalog MCP tool — correct way to introspect Coral schema
 
 router.get('/health', async (ctx) => {
   try {
-    const result = await coral.query(
-      `SELECT schema_name, table_name FROM coral.tables ORDER BY 1, 2 LIMIT 100`
-    );
+    const items = await coral.listCatalog();
+    const schemas = [...new Set(items.map((i) => i.schema))].sort();
+
     return ctx.json({
       data: {
         status: 'connected',
-        tables: result.rows,
-        table_count: result.row_count,
+        schemas,
+        table_count: items.length,
+        tables: items,
       },
     });
   } catch (err) {
@@ -23,9 +27,10 @@ router.get('/health', async (ctx) => {
         data: {
           status: 'error',
           error: err instanceof Error ? err.message : 'Unknown error',
+          hint: 'Run `pnpm setup:coral` to register sources',
         },
       },
-      503
+      503,
     );
   }
 });
@@ -33,10 +38,34 @@ router.get('/health', async (ctx) => {
 // ─── GET /coral/sources ──────────────────────────────────────────────────────
 
 router.get('/sources', async (ctx) => {
-  const result = await coral.query(
-    `SELECT DISTINCT schema_name FROM coral.tables ORDER BY 1`
-  );
-  return ctx.json({ data: result.rows });
+  const items = await coral.listCatalog();
+  const schemas = [...new Set(items.map((i) => i.schema))].sort();
+  return ctx.json({ data: schemas });
 });
+
+// ─── GET /coral/tables/:schema ────────────────────────────────────────────────
+
+router.get(
+  '/tables/:schema',
+  zValidator('param', z.object({ schema: z.string().min(1).max(50) })),
+  async (ctx) => {
+    const { schema } = ctx.req.valid('param');
+    const items = await coral.listCatalog(schema);
+    return ctx.json({ data: items });
+  },
+);
+
+// ─── POST /coral/query ────────────────────────────────────────────────────────
+// Dev/debug endpoint — run arbitrary read-only SQL against Coral
+
+router.post(
+  '/query',
+  zValidator('json', z.object({ sql: z.string().min(1).max(5000) })),
+  async (ctx) => {
+    const { sql } = ctx.req.valid('json');
+    const result = await coral.query(sql);
+    return ctx.json({ data: result });
+  },
+);
 
 export { router as coralRouter };

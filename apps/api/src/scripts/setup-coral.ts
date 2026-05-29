@@ -1,10 +1,15 @@
 #!/usr/bin/env tsx
 /**
- * Run once to register all Coral sources using env vars.
- * Usage: pnpm tsx src/scripts/setup-coral.ts
+ * Registers all 4 Coral sources using env vars (no --interactive prompt).
+ * Safe to re-run — existing sources are updated in place.
  *
- * Coral reads credentials from env vars during `coral source add`.
- * Credentials are stored locally by Coral and used at query time.
+ * Usage:
+ *   pnpm setup:coral                          # local
+ *   docker compose run api pnpm setup:coral   # Docker (uses mounted coral volume)
+ *
+ * Docs: https://withcoral.com/docs/getting-started/quickstart
+ *   "For scripted setups, omit --interactive and Coral reads each input from
+ *    an environment variable of the same name"
  */
 
 import { execSync } from 'child_process';
@@ -13,25 +18,33 @@ import 'dotenv/config';
 const sources = [
   {
     name: 'pagerduty',
-    env: { PAGERDUTY_API_TOKEN: process.env.PAGERDUTY_API_TOKEN },
+    env:  { PAGERDUTY_API_TOKEN: process.env.PAGERDUTY_API_TOKEN },
   },
   {
     name: 'datadog',
-    env: {
-      DD_API_KEY: process.env.DD_API_KEY,
+    env:  {
+      DD_API_KEY:         process.env.DD_API_KEY,
       DD_APPLICATION_KEY: process.env.DD_APPLICATION_KEY,
-      DD_SITE: process.env.DD_SITE ?? 'datadoghq.com',
+      DD_SITE:            process.env.DD_SITE ?? 'datadoghq.com',
     },
   },
   {
     name: 'github',
-    env: { GITHUB_TOKEN: process.env.GITHUB_TOKEN },
+    env:  { GITHUB_TOKEN: process.env.GITHUB_TOKEN },
   },
   {
     name: 'statusgator',
-    env: { STATUSGATOR_API_TOKEN: process.env.STATUSGATOR_API_TOKEN },
+    env:  { STATUSGATOR_API_TOKEN: process.env.STATUSGATOR_API_TOKEN },
   },
 ];
+
+// Pass CORAL_CONFIG_DIR through if set — required for Docker persistence
+const coralEnv: NodeJS.ProcessEnv = {
+  ...process.env,
+  ...(process.env.CORAL_CONFIG_DIR
+    ? { CORAL_CONFIG_DIR: process.env.CORAL_CONFIG_DIR }
+    : {}),
+};
 
 for (const source of sources) {
   const missing = Object.entries(source.env)
@@ -43,18 +56,21 @@ for (const source of sources) {
     process.exit(1);
   }
 
+  const sourceEnv = { ...coralEnv, ...source.env };
+
   try {
-    console.log(`[setup-coral] adding source: ${source.name}`);
+    console.log(`[setup-coral] registering source: ${source.name}`);
+    // coral source add <name>  (no --interactive = reads from env vars)
     execSync(`coral source add ${source.name}`, {
       stdio: 'inherit',
-      env: { ...process.env, ...source.env },
+      env:   sourceEnv as NodeJS.ProcessEnv,
     });
     console.log(`[setup-coral] ✓ ${source.name}`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    // "already exists" is fine
-    if (msg.includes('already') || msg.includes('exists')) {
-      console.log(`[setup-coral] ✓ ${source.name} (already configured)`);
+    // "already exists" / re-run is fine — coral updates credentials in place
+    if (msg.toLowerCase().includes('already') || msg.toLowerCase().includes('exists')) {
+      console.log(`[setup-coral] ✓ ${source.name} (updated)`);
     } else {
       console.error(`[setup-coral] ✗ ${source.name}: ${msg}`);
       process.exit(1);
@@ -62,4 +78,4 @@ for (const source of sources) {
   }
 }
 
-console.log('\n[setup-coral] All sources ready.');
+console.log('\n[setup-coral] All 4 sources registered. Run `coral source list` to verify.');
