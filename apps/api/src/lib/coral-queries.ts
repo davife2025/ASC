@@ -3,7 +3,6 @@ import type { CoralQueryResult } from '@sre/types';
 
 // ─── PagerDuty ───────────────────────────────────────────────────────────────
 
-/** Active high-urgency incidents */
 export function fetchActiveIncidents(): Promise<CoralQueryResult> {
   return coral.query(`
     SELECT id, title, urgency, status, service, started_at, resolved_at,
@@ -16,29 +15,26 @@ export function fetchActiveIncidents(): Promise<CoralQueryResult> {
   `);
 }
 
-/** Single incident detail + recent log entries */
 export function fetchIncidentDetail(pagerdutyId: string): Promise<CoralQueryResult> {
   return coral.query(`
     SELECT id, title, urgency, status, service, started_at, resolved_at,
            html_url, summary, first_trigger_log_entry
     FROM pagerduty.incidents
-    WHERE id = '${escape(pagerdutyId)}'
+    WHERE id = '${esc(pagerdutyId)}'
     LIMIT 1
   `);
 }
 
-/** Log entries for an incident (timeline of actions) */
 export function fetchIncidentLogEntries(pagerdutyId: string): Promise<CoralQueryResult> {
   return coral.query(`
     SELECT id, type, summary, created_at, channel_type
     FROM pagerduty.log_entries
-    WHERE incident = '${escape(pagerdutyId)}'
+    WHERE incident = '${esc(pagerdutyId)}'
     ORDER BY created_at DESC
     LIMIT 30
   `);
 }
 
-/** Recent change events (deploys / config changes) from PagerDuty */
 export function fetchRecentChangeEvents(): Promise<CoralQueryResult> {
   return coral.query(`
     SELECT id, routing_key, summary, timestamp, links, custom_details
@@ -50,7 +46,6 @@ export function fetchRecentChangeEvents(): Promise<CoralQueryResult> {
 
 // ─── Datadog ─────────────────────────────────────────────────────────────────
 
-/** Monitors currently in alert/warn state */
 export function fetchFiringMonitors(): Promise<CoralQueryResult> {
   return coral.query(`
     SELECT id, name, status, query, message, tags, priority,
@@ -62,19 +57,19 @@ export function fetchFiringMonitors(): Promise<CoralQueryResult> {
   `);
 }
 
-/** Recent Datadog events in the last N minutes */
 export function fetchRecentDatadogEvents(windowMinutes = 120): Promise<CoralQueryResult> {
+  // FIX: clamp to safe integer range before interpolating
+  const mins = Math.min(Math.max(Math.floor(windowMinutes), 1), 1440);
   return coral.query(`
     SELECT id, title, text, date_happened, priority, alert_type, tags, source
     FROM datadog.events
-    WHERE date_happened > NOW() - INTERVAL '${windowMinutes} minutes'
+    WHERE date_happened > NOW() - INTERVAL '${mins} minutes'
       AND alert_type IN ('error', 'warning')
     ORDER BY date_happened DESC
     LIMIT 50
   `);
 }
 
-/** Service health overview */
 export function fetchServiceHealth(): Promise<CoralQueryResult> {
   return coral.query(`
     SELECT service_name, env, overall_health, p50, p95, p99,
@@ -85,7 +80,6 @@ export function fetchServiceHealth(): Promise<CoralQueryResult> {
   `);
 }
 
-/** Active Datadog incidents */
 export function fetchDatadogIncidents(): Promise<CoralQueryResult> {
   return coral.query(`
     SELECT id, title, status, severity, created, modified,
@@ -99,51 +93,50 @@ export function fetchDatadogIncidents(): Promise<CoralQueryResult> {
 
 // ─── GitHub ──────────────────────────────────────────────────────────────────
 
-/** Recent merged PRs for a repo (potential deploys) */
 export function fetchRecentMergedPRs(
   owner: string,
   repo: string,
-  windowHours = 6
+  windowHours = 6,
 ): Promise<CoralQueryResult> {
+  const hrs = Math.min(Math.max(Math.floor(windowHours), 1), 72);
   return coral.query(`
     SELECT number, title, state, merged_at, head_sha, head_ref, base_ref,
            user_login, html_url, additions, deletions, changed_files
     FROM github.pulls
-    WHERE owner = '${escape(owner)}'
-      AND repo = '${escape(repo)}'
+    WHERE owner = '${esc(owner)}'
+      AND repo  = '${esc(repo)}'
       AND state = 'closed'
-      AND merged_at > NOW() - INTERVAL '${windowHours} hours'
+      AND merged_at > NOW() - INTERVAL '${hrs} hours'
     ORDER BY merged_at DESC
     LIMIT 20
   `);
 }
 
-/** Recent commits to main/master */
 export function fetchRecentCommits(
   owner: string,
   repo: string,
-  windowHours = 6
+  windowHours = 6,
 ): Promise<CoralQueryResult> {
+  const hrs = Math.min(Math.max(Math.floor(windowHours), 1), 72);
   return coral.query(`
     SELECT sha, message, author_name, author_email, committer_date, html_url
     FROM github.commits
-    WHERE owner = '${escape(owner)}'
-      AND repo = '${escape(repo)}'
-      AND ref = 'main'
-      AND committer_date > NOW() - INTERVAL '${windowHours} hours'
+    WHERE owner = '${esc(owner)}'
+      AND repo  = '${esc(repo)}'
+      AND ref   = 'main'
+      AND committer_date > NOW() - INTERVAL '${hrs} hours'
     ORDER BY committer_date DESC
     LIMIT 30
   `);
 }
 
-/** Failed or cancelled workflow runs */
 export function fetchFailedWorkflows(owner: string, repo: string): Promise<CoralQueryResult> {
   return coral.query(`
     SELECT id, name, status, conclusion, head_sha, head_branch,
            created_at, updated_at, html_url
     FROM github.workflow_runs
-    WHERE owner = '${escape(owner)}'
-      AND repo = '${escape(repo)}'
+    WHERE owner      = '${esc(owner)}'
+      AND repo       = '${esc(repo)}'
       AND conclusion IN ('failure', 'cancelled', 'timed_out')
       AND created_at > NOW() - INTERVAL '6 hours'
     ORDER BY created_at DESC
@@ -153,7 +146,6 @@ export function fetchFailedWorkflows(owner: string, repo: string): Promise<Coral
 
 // ─── StatusGator ─────────────────────────────────────────────────────────────
 
-/** Active third-party incidents */
 export function fetchThirdPartyIncidents(): Promise<CoralQueryResult> {
   return coral.query(`
     SELECT id, service_name, title, status, impact, started_at, updated_at,
@@ -165,19 +157,18 @@ export function fetchThirdPartyIncidents(): Promise<CoralQueryResult> {
   `);
 }
 
-/** Recent StatusGator incidents in the last 24h (resolved too) */
 export function fetchRecentThirdPartyIncidents(windowHours = 24): Promise<CoralQueryResult> {
+  const hrs = Math.min(Math.max(Math.floor(windowHours), 1), 168);
   return coral.query(`
     SELECT id, service_name, title, status, impact, started_at, resolved_at,
            url, affected_components
     FROM statusgator.incidents
-    WHERE started_at > NOW() - INTERVAL '${windowHours} hours'
+    WHERE started_at > NOW() - INTERVAL '${hrs} hours'
     ORDER BY started_at DESC
     LIMIT 50
   `);
 }
 
-/** Component status overview for monitored services */
 export function fetchServiceComponentStatus(): Promise<CoralQueryResult> {
   return coral.query(`
     SELECT service_name, component_name, status, updated_at
@@ -188,23 +179,19 @@ export function fetchServiceComponentStatus(): Promise<CoralQueryResult> {
   `);
 }
 
-// ─── Cross-source correlation ────────────────────────────────────────────────
+// ─── Cross-source correlation ─────────────────────────────────────────────────
 
-/**
- * Correlate PagerDuty incidents with Datadog monitors.
- * Joins on service name to find monitors that fired around incident time.
- */
 export function correlateIncidentsWithMonitors(): Promise<CoralQueryResult> {
   return coral.query(`
     SELECT
-      p.id AS pd_incident_id,
-      p.title AS pd_title,
-      p.service AS pd_service,
+      p.id          AS pd_incident_id,
+      p.title       AS pd_title,
+      p.service     AS pd_service,
       p.started_at,
       p.urgency,
-      d.name AS monitor_name,
-      d.status AS monitor_status,
-      d.tags AS monitor_tags
+      d.name        AS monitor_name,
+      d.status      AS monitor_status,
+      d.tags        AS monitor_tags
     FROM pagerduty.incidents p
     LEFT JOIN datadog.monitors d
       ON d.tags LIKE '%service:' || p.service || '%'
@@ -218,7 +205,7 @@ export function correlateIncidentsWithMonitors(): Promise<CoralQueryResult> {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/** Basic SQL injection guard for interpolated values */
-function escape(value: string): string {
+/** Escape single quotes for SQL string interpolation */
+function esc(value: string): string {
   return value.replace(/'/g, "''");
 }

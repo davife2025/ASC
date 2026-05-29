@@ -3,6 +3,8 @@
 export type IncidentSeverity = 'critical' | 'high' | 'medium' | 'low';
 export type IncidentStatus = 'triggered' | 'acknowledged' | 'resolved';
 export type InvestigationStatus = 'pending' | 'running' | 'complete' | 'failed';
+export type EventSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
+export type SourceName = 'pagerduty' | 'datadog' | 'github' | 'statusgator';
 
 export interface Incident {
   id: string;
@@ -11,9 +13,10 @@ export interface Incident {
   severity: IncidentSeverity;
   status: IncidentStatus;
   created_at: string;
-  resolved_at?: string;
+  resolved_at?: string | null;
   service_name: string;
-  assigned_to?: string;
+  assigned_to?: string | null;
+  updated_at?: string;
 }
 
 // ─── Investigation ───────────────────────────────────────────────────────────
@@ -23,10 +26,10 @@ export interface Investigation {
   incident_id: string;
   status: InvestigationStatus;
   started_at: string;
-  completed_at?: string;
-  summary?: IncidentSummary;
-  raw_data?: InvestigationRawData;
-  error?: string;
+  completed_at?: string | null;
+  summary?: IncidentSummary | null;
+  raw_data?: InvestigationRawData | null;
+  error?: string | null;
 }
 
 export interface IncidentSummary {
@@ -43,9 +46,9 @@ export interface IncidentSummary {
 
 export interface TimelineEvent {
   timestamp: string;
-  source: 'pagerduty' | 'datadog' | 'github' | 'statusgator';
+  source: SourceName;
   event: string;
-  severity?: string;
+  severity: EventSeverity;
 }
 
 export interface RecentDeploy {

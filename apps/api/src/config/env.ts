@@ -6,17 +6,17 @@ function require(key: string): string {
   return val;
 }
 
-function optional(key: string, fallback: string): string {
+function optional(key: string, fallback = ''): string {
   return process.env[key] ?? fallback;
 }
 
 export const env = {
-  port: Number(optional('PORT', '3001')),
+  port:    Number(optional('PORT', '3001')),
   nodeEnv: optional('NODE_ENV', 'development'),
   webOrigin: optional('WEB_ORIGIN', 'http://localhost:3000'),
 
   supabase: {
-    url: require('SUPABASE_URL'),
+    url:            require('SUPABASE_URL'),
     serviceRoleKey: require('SUPABASE_SERVICE_ROLE_KEY'),
   },
 
@@ -24,12 +24,15 @@ export const env = {
 
   coral: {
     pagerdutyToken: require('PAGERDUTY_API_TOKEN'),
-    ddApiKey: require('DD_API_KEY'),
-    ddAppKey: require('DD_APPLICATION_KEY'),
-    ddSite: optional('DD_SITE', 'datadoghq.com'),
-    githubToken: require('GITHUB_TOKEN'),
+    ddApiKey:       require('DD_API_KEY'),
+    ddAppKey:       require('DD_APPLICATION_KEY'),
+    ddSite:         optional('DD_SITE', 'datadoghq.com'),
+    githubToken:    require('GITHUB_TOKEN'),
     statusgatorToken: require('STATUSGATOR_API_TOKEN'),
   },
 
-  serviceMapJson: optional('SERVICE_MAP_JSON', ''),
+  // Optional — if set, PagerDuty webhook signatures are verified
+  pagerdutyWebhookSecret: optional('PAGERDUTY_WEBHOOK_SECRET'),
+
+  serviceMapJson: optional('SERVICE_MAP_JSON'),
 } as const;

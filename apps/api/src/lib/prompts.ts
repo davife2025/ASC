@@ -37,6 +37,31 @@ OUTPUT SCHEMA:
   "confidence": "high|medium|low"
 }`;
 
+// Approx chars budget per section to stay under ~80k token prompt
+const BUDGET = {
+  logEntries:          8_000,
+  firingMonitors:      6_000,
+  datadogEvents:       10_000,
+  serviceHealth:       5_000,
+  datadogIncidents:    4_000,
+  recentPRs:           5_000,
+  failedWorkflows:     3_000,
+  thirdPartyIncidents: 5_000,
+  thirdPartyComponents:4_000,
+};
+
+function truncate(rows: Record<string, unknown>[], maxChars: number): Record<string, unknown>[] {
+  const result: Record<string, unknown>[] = [];
+  let total = 0;
+  for (const row of rows) {
+    const s = JSON.stringify(row);
+    if (total + s.length > maxChars) break;
+    result.push(row);
+    total += s.length;
+  }
+  return result;
+}
+
 export function buildUserPrompt(data: {
   incident: Record<string, unknown>;
   logEntries: Record<string, unknown>[];
@@ -49,37 +74,47 @@ export function buildUserPrompt(data: {
   thirdPartyIncidents: Record<string, unknown>[];
   thirdPartyComponents: Record<string, unknown>[];
 }): string {
+  const logEntries          = truncate(data.logEntries,          BUDGET.logEntries);
+  const firingMonitors      = truncate(data.firingMonitors,      BUDGET.firingMonitors);
+  const datadogEvents       = truncate(data.datadogEvents,       BUDGET.datadogEvents);
+  const serviceHealth       = truncate(data.serviceHealth,       BUDGET.serviceHealth);
+  const datadogIncidents    = truncate(data.datadogIncidents,    BUDGET.datadogIncidents);
+  const recentPRs           = truncate(data.recentPRs,           BUDGET.recentPRs);
+  const failedWorkflows     = truncate(data.failedWorkflows,     BUDGET.failedWorkflows);
+  const thirdPartyIncidents = truncate(data.thirdPartyIncidents, BUDGET.thirdPartyIncidents);
+  const thirdPartyComponents= truncate(data.thirdPartyComponents,BUDGET.thirdPartyComponents);
+
   return `Analyse this production incident and return a JSON summary.
 
 ## PAGERDUTY INCIDENT
 ${JSON.stringify(data.incident, null, 2)}
 
-## PAGERDUTY LOG ENTRIES (${data.logEntries.length} entries)
-${JSON.stringify(data.logEntries.slice(0, 15), null, 2)}
+## PAGERDUTY LOG ENTRIES (showing ${logEntries.length}/${data.logEntries.length})
+${JSON.stringify(logEntries, null, 2)}
 
-## DATADOG FIRING MONITORS (${data.firingMonitors.length})
-${JSON.stringify(data.firingMonitors.slice(0, 10), null, 2)}
+## DATADOG FIRING MONITORS (showing ${firingMonitors.length}/${data.firingMonitors.length})
+${JSON.stringify(firingMonitors, null, 2)}
 
-## DATADOG RECENT ERROR EVENTS (${data.datadogEvents.length})
-${JSON.stringify(data.datadogEvents.slice(0, 20), null, 2)}
+## DATADOG RECENT ERROR EVENTS (showing ${datadogEvents.length}/${data.datadogEvents.length})
+${JSON.stringify(datadogEvents, null, 2)}
 
-## DATADOG SERVICE HEALTH
-${JSON.stringify(data.serviceHealth.slice(0, 10), null, 2)}
+## DATADOG SERVICE HEALTH (showing ${serviceHealth.length}/${data.serviceHealth.length})
+${JSON.stringify(serviceHealth, null, 2)}
 
 ## DATADOG ACTIVE INCIDENTS
-${JSON.stringify(data.datadogIncidents, null, 2)}
+${JSON.stringify(datadogIncidents, null, 2)}
 
-## GITHUB RECENT MERGED PRs (last 6h)
-${JSON.stringify(data.recentPRs, null, 2)}
+## GITHUB RECENT MERGED PRs — last 6h (showing ${recentPRs.length}/${data.recentPRs.length})
+${JSON.stringify(recentPRs, null, 2)}
 
-## GITHUB FAILED WORKFLOWS (last 6h)
-${JSON.stringify(data.failedWorkflows, null, 2)}
+## GITHUB FAILED WORKFLOWS — last 6h (showing ${failedWorkflows.length}/${data.failedWorkflows.length})
+${JSON.stringify(failedWorkflows, null, 2)}
 
-## THIRD-PARTY INCIDENTS (StatusGator)
-${JSON.stringify(data.thirdPartyIncidents, null, 2)}
+## THIRD-PARTY INCIDENTS — StatusGator (showing ${thirdPartyIncidents.length}/${data.thirdPartyIncidents.length})
+${JSON.stringify(thirdPartyIncidents, null, 2)}
 
-## THIRD-PARTY COMPONENT STATUS
-${JSON.stringify(data.thirdPartyComponents.slice(0, 20), null, 2)}
+## THIRD-PARTY COMPONENT STATUS (showing ${thirdPartyComponents.length}/${data.thirdPartyComponents.length})
+${JSON.stringify(thirdPartyComponents, null, 2)}
 
 Return ONLY the JSON object described in the system prompt.`;
 }

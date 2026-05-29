@@ -34,18 +34,20 @@ export async function runInvestigation(investigationId: string): Promise<void> {
     const serviceName = String(incident.service_name ?? '');
     const ghRepo = resolveGitHubRepo(serviceName);
 
-    console.log(`[agent] fetching Coral sources for incident ${pagerdutyId}`);
+    console.log(`[agent] fetching Coral sources for ${pagerdutyId}`);
 
+    // FIX: use named tuple instead of spread rest to avoid fragile index access
     const [
-      incidentDetail,
-      logEntries,
-      firingMonitors,
-      datadogEvents,
-      serviceHealth,
-      datadogIncidents,
-      thirdPartyIncidents,
-      thirdPartyComponents,
-      ...githubResults
+      incidentDetailResult,
+      logEntriesResult,
+      firingMonitorsResult,
+      datadogEventsResult,
+      serviceHealthResult,
+      datadogIncidentsResult,
+      thirdPartyIncidentsResult,
+      thirdPartyComponentsResult,
+      recentPRsResult,
+      failedWorkflowsResult,
     ] = await Promise.allSettled([
       fetchIncidentDetail(pagerdutyId),
       fetchIncidentLogEntries(pagerdutyId),
@@ -55,62 +57,49 @@ export async function runInvestigation(investigationId: string): Promise<void> {
       fetchDatadogIncidents(),
       fetchThirdPartyIncidents(),
       fetchServiceComponentStatus(),
-      ...(ghRepo
-        ? [
-            fetchRecentMergedPRs(ghRepo.owner, ghRepo.repo, 6),
-            fetchFailedWorkflows(ghRepo.owner, ghRepo.repo),
-          ]
-        : []),
+      ghRepo ? fetchRecentMergedPRs(ghRepo.owner, ghRepo.repo, 6) : Promise.resolve({ rows: [], columns: [], row_count: 0, execution_ms: 0 }),
+      ghRepo ? fetchFailedWorkflows(ghRepo.owner, ghRepo.repo) : Promise.resolve({ rows: [], columns: [], row_count: 0, execution_ms: 0 }),
     ]);
 
     const raw = {
-      incident: extract(incidentDetail)?.[0] ?? incident,
-      logEntries: extract(logEntries) ?? [],
-      firingMonitors: extract(firingMonitors) ?? [],
-      datadogEvents: extract(datadogEvents) ?? [],
-      serviceHealth: extract(serviceHealth) ?? [],
-      datadogIncidents: extract(datadogIncidents) ?? [],
-      thirdPartyIncidents: extract(thirdPartyIncidents) ?? [],
-      thirdPartyComponents: extract(thirdPartyComponents) ?? [],
-      recentPRs: ghRepo ? (extract(githubResults[0]) ?? []) : [],
-      failedWorkflows: ghRepo ? (extract(githubResults[1]) ?? []) : [],
+      incident:            extract(incidentDetailResult)?.[0] ?? incident,
+      logEntries:          extract(logEntriesResult) ?? [],
+      firingMonitors:      extract(firingMonitorsResult) ?? [],
+      datadogEvents:       extract(datadogEventsResult) ?? [],
+      serviceHealth:       extract(serviceHealthResult) ?? [],
+      datadogIncidents:    extract(datadogIncidentsResult) ?? [],
+      thirdPartyIncidents: extract(thirdPartyIncidentsResult) ?? [],
+      thirdPartyComponents:extract(thirdPartyComponentsResult) ?? [],
+      recentPRs:           extract(recentPRsResult) ?? [],
+      failedWorkflows:     extract(failedWorkflowsResult) ?? [],
     };
 
     console.log('[agent] coral data:', {
-      logEntries: raw.logEntries.length,
-      firingMonitors: raw.firingMonitors.length,
-      datadogEvents: raw.datadogEvents.length,
-      recentPRs: raw.recentPRs.length,
+      logEntries:          raw.logEntries.length,
+      firingMonitors:      raw.firingMonitors.length,
+      datadogEvents:       raw.datadogEvents.length,
+      recentPRs:           raw.recentPRs.length,
       thirdPartyIncidents: raw.thirdPartyIncidents.length,
     });
 
-    console.log(`[agent] calling Kimi K2 for incident summary`);
     const summary = await generateSummary(raw);
 
     await supabase
       .from('investigations')
       .update({
-        status: 'complete',
+        status:       'complete',
         completed_at: new Date().toISOString(),
         summary,
         raw_data: {
-          pagerduty: { incident: raw.incident, log_entries: raw.logEntries },
-          datadog: {
-            monitors: raw.firingMonitors,
-            events: raw.datadogEvents,
-            service_health: raw.serviceHealth,
-            incidents: raw.datadogIncidents,
-          },
-          github: { prs: raw.recentPRs, workflows: raw.failedWorkflows },
-          statusgator: {
-            incidents: raw.thirdPartyIncidents,
-            components: raw.thirdPartyComponents,
-          },
+          pagerduty:   { incident: raw.incident, log_entries: raw.logEntries },
+          datadog:     { monitors: raw.firingMonitors, events: raw.datadogEvents, service_health: raw.serviceHealth, incidents: raw.datadogIncidents },
+          github:      { prs: raw.recentPRs, workflows: raw.failedWorkflows },
+          statusgator: { incidents: raw.thirdPartyIncidents, components: raw.thirdPartyComponents },
         },
       })
       .eq('id', investigationId);
 
-    console.log(`[agent] done (confidence: ${summary.confidence})`);
+    console.log(`[agent] done — confidence: ${summary.confidence}`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[agent] failed:`, message);
@@ -119,10 +108,19 @@ export async function runInvestigation(investigationId: string): Promise<void> {
 }
 
 async function generateSummary(raw: Parameters<typeof buildUserPrompt>[0]): Promise<IncidentSummary> {
+  const userPrompt = buildUserPrompt(raw);
+
+  // FIX: guard against huge prompts — Kimi K2 context limit is ~128k tokens
+  // rough estimate: 1 token ≈ 4 chars
+  const estimatedTokens = (SYSTEM_PROMPT.length + userPrompt.length) / 4;
+  if (estimatedTokens > 100_000) {
+    console.warn(`[agent] prompt estimated at ~${Math.round(estimatedTokens)} tokens — truncation may occur`);
+  }
+
   const text = await chatCompletion({
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user', content: buildUserPrompt(raw) },
+      { role: 'user',   content: userPrompt },
     ],
     maxTokens: 2048,
     temperature: 0.1,
@@ -140,7 +138,7 @@ async function generateSummary(raw: Parameters<typeof buildUserPrompt>[0]): Prom
 async function setStatus(
   id: string,
   status: 'running' | 'complete' | 'failed',
-  error?: string
+  error?: string,
 ): Promise<void> {
   await supabase
     .from('investigations')
@@ -153,10 +151,10 @@ async function setStatus(
 }
 
 function extract(
-  settled: PromiseSettledResult<{ rows: Record<string, unknown>[] }> | undefined
+  settled: PromiseSettledResult<{ rows: Record<string, unknown>[] }>,
 ): Record<string, unknown>[] | null {
-  if (!settled || settled.status === 'rejected') {
-    if (settled?.status === 'rejected') console.warn('[agent] query failed:', settled.reason);
+  if (settled.status === 'rejected') {
+    console.warn('[agent] coral query failed:', settled.reason);
     return null;
   }
   return settled.value.rows;
