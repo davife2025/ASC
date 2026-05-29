@@ -1,0 +1,26 @@
+{
+  "name": "@sre/api",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@sre/types": "workspace:*",
+    "@supabase/supabase-js": "^2.43.0",
+    "@anthropic-ai/sdk": "^0.24.0",
+    "hono": "^4.4.0",
+    "@hono/node-server": "^1.12.0",
+    "dotenv": "^16.4.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/node": "^20.0.0",
+    "tsx": "^4.11.0"
+  }
+}
