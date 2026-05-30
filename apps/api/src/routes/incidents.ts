@@ -65,7 +65,15 @@ router.get(
 // ─── POST /incidents/sync ────────────────────────────────────────────────────
 
 router.post('/sync', async (ctx) => {
-  const result = await fetchActiveIncidents();
+  // Coral may not be available in local dev — return empty sync gracefully
+  let result;
+  try {
+    result = await fetchActiveIncidents();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn('[incidents/sync] coral unavailable — skipping sync:', msg);
+    return ctx.json({ data: { synced: 0, incidents: [], reason: msg } });
+  }
 
   if (result.row_count === 0) {
     return ctx.json({ data: { synced: 0, incidents: [] } });
@@ -74,7 +82,6 @@ router.post('/sync', async (ctx) => {
   const incidents = result.rows.map((row) => ({
     pagerduty_id: String(row.id),
     title:        String(row.title ?? ''),
-    // FIX: full urgency → severity mapping (was missing critical + medium)
     severity:     mapUrgencyToSeverity(String(row.urgency ?? 'low')),
     status:       normaliseStatus(String(row.status ?? 'triggered')),
     service_name: String(row.service ?? 'unknown'),
@@ -107,10 +114,21 @@ router.get(
 
     if (dbErr) throw new Error(dbErr.message);
 
-    const [detail, logEntries] = await Promise.all([
-      fetchIncidentDetail(incident.pagerduty_id),
-      fetchIncidentLogEntries(incident.pagerduty_id),
-    ]);
+    // Coral may not be available in local dev — return nulls gracefully
+    let detail;
+    let logEntries;
+    try {
+      [detail, logEntries] = await Promise.all([
+        fetchIncidentDetail(incident.pagerduty_id),
+        fetchIncidentLogEntries(incident.pagerduty_id),
+      ]);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn('[incidents/:id/live] coral unavailable:', msg);
+      return ctx.json({
+        data: { incident: null, log_entries: [], reason: msg },
+      });
+    }
 
     return ctx.json({
       data: { incident: detail.rows[0] ?? null, log_entries: logEntries.rows },
@@ -121,7 +139,6 @@ router.get(
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function mapUrgencyToSeverity(urgency: string): Incident['severity'] {
-  // PagerDuty urgency is high/low; Datadog/others may send critical/medium too
   const map: Record<string, Incident['severity']> = {
     critical: 'critical',
     high:     'high',
@@ -145,3 +162,5 @@ function normaliseStatus(status: string): Incident['status'] {
 }
 
 export { router as incidentsRouter };
+
+

@@ -11,17 +11,17 @@
     "setup:coral": "tsx src/scripts/setup-coral.ts"
   },
   "dependencies": {
-    "@sre/types": "workspace:*",
-    "@supabase/supabase-js": "^2.43.0",
     "@hono/node-server": "^1.12.0",
     "@hono/zod-validator": "^0.2.2",
-    "hono": "^4.4.0",
+    "@sre/types": "workspace:*",
+    "@supabase/supabase-js": "^2.43.0",
     "dotenv": "^16.4.0",
+    "hono": "^4.4.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {
-    "typescript": "^5.4.0",
-    "@types/node": "^20.0.0",
-    "tsx": "^4.11.0"
+    "@types/node": "^20.19.41",
+    "tsx": "^4.11.0",
+    "typescript": "^5.4.0"
   }
 }

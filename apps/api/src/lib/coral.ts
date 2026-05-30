@@ -14,6 +14,8 @@ import type { CoralQueryResult } from '@sre/types';
  *
  * ⚠️  The tool name is "sql", NOT "query".
  *     Using "query" causes a silent "unknown tool" error from the MCP server.
+ *
+ * Set CORAL_ENABLED=false in your .env to skip coral entirely (e.g. local dev).
  */
 
 interface JsonRpcRequest {
@@ -51,22 +53,33 @@ class CoralClient {
   private initialized = false;
   private initPromise: Promise<void> | null = null;
 
+  private get isEnabled(): boolean {
+    return process.env.CORAL_ENABLED === 'true';
+  }
+
   private sourceEnv(): NodeJS.ProcessEnv {
     return {
       ...process.env,
       // Source credentials read by Coral at query time from env
-      PAGERDUTY_API_TOKEN:    env.coral.pagerdutyToken,
-      DD_API_KEY:             env.coral.ddApiKey,
-      DD_APPLICATION_KEY:     env.coral.ddAppKey,
-      DD_SITE:                env.coral.ddSite,
-      GITHUB_TOKEN:           env.coral.githubToken,
-      STATUSGATOR_API_TOKEN:  env.coral.statusgatorToken,
+      PAGERDUTY_API_TOKEN:   env.coral.pagerdutyToken,
+      DD_API_KEY:            env.coral.ddApiKey,
+      DD_APPLICATION_KEY:    env.coral.ddAppKey,
+      DD_SITE:               env.coral.ddSite,
+      GITHUB_TOKEN:          env.coral.githubToken,
+      STATUSGATOR_API_TOKEN: env.coral.statusgatorToken,
       // Persist Coral state across restarts (important in Docker)
       ...(env.coralConfigDir ? { CORAL_CONFIG_DIR: env.coralConfigDir } : {}),
     };
   }
 
   connect(): Promise<void> {
+    // Skip if coral is disabled via env var
+    if (!this.isEnabled) {
+      return Promise.reject(
+        new Error('Coral is disabled — set CORAL_ENABLED=true in your .env to enable it'),
+      );
+    }
+
     if (this.initialized) return Promise.resolve();
     if (this.initPromise) return this.initPromise;
 
@@ -78,9 +91,25 @@ class CoralClient {
   }
 
   private async _connect(): Promise<void> {
+    // Spawn the coral process
     this.process = spawn('coral', ['mcp-stdio'], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: this.sourceEnv(),
+    });
+
+    // Wait for either a successful spawn or an error (e.g. ENOENT = not installed)
+    await new Promise<void>((resolve, reject) => {
+      this.process!.on('error', (err) => {
+        reject(
+          new Error(
+            `Failed to start coral CLI: ${err.message}. ` +
+            `Make sure 'coral' is installed and available in your PATH, ` +
+            `or set CORAL_ENABLED=false to skip coral in local dev.`,
+          ),
+        );
+      });
+      // 'spawn' event fires once the process has successfully started
+      this.process!.on('spawn', () => resolve());
     });
 
     this.process.stdout!.setEncoding('utf8');
@@ -201,7 +230,9 @@ class CoralClient {
   }
 
   /** Use the list_catalog MCP tool for schema discovery (no raw SQL needed) */
-  async listCatalog(schema?: string): Promise<Array<{ schema: string; table: string; kind: string }>> {
+  async listCatalog(
+    schema?: string,
+  ): Promise<Array<{ schema: string; table: string; kind: string }>> {
     await this.connect();
 
     const result = (await this.rpc('tools/call', {

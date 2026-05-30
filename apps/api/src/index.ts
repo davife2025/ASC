@@ -22,18 +22,22 @@ app.use(
 );
 app.use('*', rateLimiter);
 app.use('*', errorHandler);
-
 app.route('/api', router);
 
 const server = serve({ fetch: app.fetch, port: env.port }, async () => {
   console.log(`[api] running on http://localhost:${env.port} (${env.nodeEnv})`);
-  await validateCoralSchema();
+
+  try {
+    await validateCoralSchema();
+  } catch (err) {
+    console.warn('[api] coral not available — skipping schema validation:', (err as Error).message);
+  }
+
   await recoverStuckInvestigations();
   startWorker();
 });
 
-// ─── Graceful shutdown ───────────────────────────────────────────────────────
-
+// ─── Graceful shutdown ──────────────────────────────────────────────────────
 let shuttingDown = false;
 
 async function shutdown(signal: string): Promise<void> {
@@ -46,18 +50,15 @@ async function shutdown(signal: string): Promise<void> {
 
   // Drain active investigations + disconnect coral
   await gracefulShutdown(15_000);
-
   process.exit(0);
 }
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT',  () => shutdown('SIGINT'));
-
 process.on('uncaughtException', (err) => {
   console.error('[api] uncaught exception:', err);
   shutdown('uncaughtException').finally(() => process.exit(1));
 });
-
 process.on('unhandledRejection', (reason) => {
   console.error('[api] unhandled rejection:', reason);
 });

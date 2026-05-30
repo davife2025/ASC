@@ -9,6 +9,12 @@ const EXPECTED: Record<string, string[]> = {
 };
 
 export async function validateCoralSchema(): Promise<void> {
+  // Skip entirely if coral is not enabled (e.g. local dev without coral installed)
+  if (!process.env.CORAL_ENABLED || process.env.CORAL_ENABLED === 'false') {
+    console.log('[coral-validate] skipped — set CORAL_ENABLED=true to enable');
+    return;
+  }
+
   console.log('[coral-validate] checking schema via list_catalog…');
 
   let items: Array<{ schema: string; table: string; kind: string }>;
@@ -37,8 +43,8 @@ export async function validateCoralSchema(): Promise<void> {
 
   // Build set of "schema.table" from actual catalog
   const actual = new Set(items.map((r) => `${r.schema}.${r.table}`));
-
   const missing: string[] = [];
+
   for (const [schema, tables] of Object.entries(EXPECTED)) {
     for (const table of tables) {
       if (!actual.has(`${schema}.${table}`)) missing.push(`${schema}.${table}`);
