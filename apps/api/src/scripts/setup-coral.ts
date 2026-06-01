@@ -1,49 +1,35 @@
 #!/usr/bin/env tsx
 /**
- * Registers all 4 Coral sources using env vars (no --interactive prompt).
- * Safe to re-run — existing sources are updated in place.
+ * Registers all 4 Coral sources.
+ *
+ * Windows (WSL): set CORAL_BIN in .env
+ *   CORAL_BIN=wsl -d Ubuntu -e env CORAL_CONFIG_DIR=/home/USER/.config/coral /home/USER/.local/bin/coral
  *
  * Usage:
- *   pnpm setup:coral                          # local
- *   docker compose run api pnpm setup:coral   # Docker (uses mounted coral volume)
- *
- * Docs: https://withcoral.com/docs/getting-started/quickstart
- *   "For scripted setups, omit --interactive and Coral reads each input from
- *    an environment variable of the same name"
+ *   pnpm setup:coral
  */
 
 import { execSync } from 'child_process';
 import 'dotenv/config';
 
 const sources = [
-  {
-    name: 'pagerduty',
-    env:  { PAGERDUTY_API_TOKEN: process.env.PAGERDUTY_API_TOKEN },
-  },
-  {
-    name: 'datadog',
-    env:  {
-      DD_API_KEY:         process.env.DD_API_KEY,
-      DD_APPLICATION_KEY: process.env.DD_APPLICATION_KEY,
-      DD_SITE:            process.env.DD_SITE ?? 'datadoghq.com',
-    },
-  },
-  {
-    name: 'github',
-    env:  { GITHUB_TOKEN: process.env.GITHUB_TOKEN },
-  },
-  {
-    name: 'statusgator',
-    env:  { STATUSGATOR_API_TOKEN: process.env.STATUSGATOR_API_TOKEN },
-  },
+  { name: 'pagerduty',   env: { PAGERDUTY_API_TOKEN:   process.env.PAGERDUTY_API_TOKEN } },
+  { name: 'grafana',     env: { GRAFANA_URL:            process.env.GRAFANA_URL, GRAFANA_TOKEN: process.env.GRAFANA_TOKEN } },
+  { name: 'github',      env: { GITHUB_TOKEN:           process.env.GITHUB_TOKEN } },
+  { name: 'statusgator', env: { STATUSGATOR_API_TOKEN:  process.env.STATUSGATOR_API_TOKEN } },
 ];
 
-// Pass CORAL_CONFIG_DIR through if set — required for Docker persistence
-const coralEnv: NodeJS.ProcessEnv = {
+// Resolve coral binary — supports CORAL_BIN for WSL on Windows
+const CORAL_BIN = process.env.CORAL_BIN?.trim() || 'coral';
+
+function coralCmd(args: string): string {
+  // CORAL_BIN may be "wsl -d Ubuntu -e coral" — append args at end
+  return `${CORAL_BIN} ${args}`;
+}
+
+const baseEnv: NodeJS.ProcessEnv = {
   ...process.env,
-  ...(process.env.CORAL_CONFIG_DIR
-    ? { CORAL_CONFIG_DIR: process.env.CORAL_CONFIG_DIR }
-    : {}),
+  ...(process.env.CORAL_CONFIG_DIR ? { CORAL_CONFIG_DIR: process.env.CORAL_CONFIG_DIR } : {}),
 };
 
 for (const source of sources) {
@@ -56,19 +42,15 @@ for (const source of sources) {
     process.exit(1);
   }
 
-  const sourceEnv = { ...coralEnv, ...source.env };
-
   try {
     console.log(`[setup-coral] registering source: ${source.name}`);
-    // coral source add <name>  (no --interactive = reads from env vars)
-    execSync(`coral source add ${source.name}`, {
+    execSync(coralCmd(`source add ${source.name}`), {
       stdio: 'inherit',
-      env:   sourceEnv as NodeJS.ProcessEnv,
+      env:   { ...baseEnv, ...source.env } as NodeJS.ProcessEnv,
     });
     console.log(`[setup-coral] ✓ ${source.name}`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    // "already exists" / re-run is fine — coral updates credentials in place
     if (msg.toLowerCase().includes('already') || msg.toLowerCase().includes('exists')) {
       console.log(`[setup-coral] ✓ ${source.name} (updated)`);
     } else {
@@ -78,4 +60,4 @@ for (const source of sources) {
   }
 }
 
-console.log('\n[setup-coral] All 4 sources registered. Run `coral source list` to verify.');
+console.log('\n[setup-coral] All 4 sources registered.');

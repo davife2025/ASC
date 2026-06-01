@@ -1,12 +1,11 @@
 import { coral } from './coral.js';
 import type { CoralQueryResult } from '@sre/types';
 
-// ─── PagerDuty ───────────────────────────────────────────────────────────────
+// ─── PagerDuty ────────────────────────────────────────────────────────────────
 
 export function fetchActiveIncidents(): Promise<CoralQueryResult> {
   return coral.query(`
-    SELECT id, title, urgency, status, service, started_at, resolved_at,
-           html_url, summary
+    SELECT id, title, urgency, status, service, started_at, resolved_at, html_url, summary
     FROM pagerduty.incidents
     WHERE status IN ('triggered', 'acknowledged')
       AND urgency = 'high'
@@ -44,54 +43,55 @@ export function fetchRecentChangeEvents(): Promise<CoralQueryResult> {
   `);
 }
 
-// ─── Datadog ─────────────────────────────────────────────────────────────────
+// ─── Grafana (replaces Datadog — free forever on Grafana Cloud) ───────────────
 
-export function fetchFiringMonitors(): Promise<CoralQueryResult> {
+/** Alert rules currently in firing/alerting state */
+export function fetchFiringAlertRules(): Promise<CoralQueryResult> {
   return coral.query(`
-    SELECT id, name, status, query, message, tags, priority,
-           created, modified, overall_state
-    FROM datadog.monitors
-    WHERE overall_state IN ('Alert', 'Warn', 'No Data')
-    ORDER BY modified DESC
+    SELECT uid, title, state, health, folder_uid,
+           updated, labels, annotations
+    FROM grafana.alert_rules
+    WHERE state IN ('firing', 'alerting', 'error', 'nodata')
+    ORDER BY updated DESC
     LIMIT 30
   `);
 }
 
-export function fetchRecentDatadogEvents(windowMinutes = 120): Promise<CoralQueryResult> {
-  // FIX: clamp to safe integer range before interpolating
+/** Recent alert annotations — events fired by Grafana alerts */
+export function fetchRecentAlertAnnotations(windowMinutes = 180): Promise<CoralQueryResult> {
   const mins = Math.min(Math.max(Math.floor(windowMinutes), 1), 1440);
   return coral.query(`
-    SELECT id, title, text, date_happened, priority, alert_type, tags, source
-    FROM datadog.events
-    WHERE date_happened > NOW() - INTERVAL '${mins} minutes'
-      AND alert_type IN ('error', 'warning')
-    ORDER BY date_happened DESC
+    SELECT id, alert_id, dashboard_id, panel_id, text, tags,
+           time, time_end
+    FROM grafana.annotations
+    WHERE time > NOW() - INTERVAL '${mins} minutes'
+      AND alert_id IS NOT NULL
+    ORDER BY time DESC
     LIMIT 50
   `);
 }
 
-export function fetchServiceHealth(): Promise<CoralQueryResult> {
+/** All configured datasources — shows what's connected */
+export function fetchDatasources(): Promise<CoralQueryResult> {
   return coral.query(`
-    SELECT service_name, env, overall_health, p50, p95, p99,
-           error_rate, requests_per_second
-    FROM datadog.service_health
-    ORDER BY error_rate DESC NULLS LAST
-    LIMIT 30
-  `);
-}
-
-export function fetchDatadogIncidents(): Promise<CoralQueryResult> {
-  return coral.query(`
-    SELECT id, title, status, severity, created, modified,
-           customer_impact_scope, customer_impact_start, customer_impact_end
-    FROM datadog.incidents
-    WHERE status != 'resolved'
-    ORDER BY created DESC
+    SELECT id, uid, name, type, url, access, is_default, json_data
+    FROM grafana.datasources
+    ORDER BY is_default DESC, name ASC
     LIMIT 20
   `);
 }
 
-// ─── GitHub ──────────────────────────────────────────────────────────────────
+/** All alert rules regardless of state — for service health overview */
+export function fetchAllAlertRules(): Promise<CoralQueryResult> {
+  return coral.query(`
+    SELECT uid, title, state, health, folder_uid, updated, labels
+    FROM grafana.alert_rules
+    ORDER BY updated DESC
+    LIMIT 50
+  `);
+}
+
+// ─── GitHub ───────────────────────────────────────────────────────────────────
 
 export function fetchRecentMergedPRs(
   owner: string,
@@ -103,9 +103,9 @@ export function fetchRecentMergedPRs(
     SELECT number, title, state, merged_at, head_sha, head_ref, base_ref,
            user_login, html_url, additions, deletions, changed_files
     FROM github.pulls
-    WHERE owner = '${esc(owner)}'
-      AND repo  = '${esc(repo)}'
-      AND state = 'closed'
+    WHERE owner     = '${esc(owner)}'
+      AND repo      = '${esc(repo)}'
+      AND state     = 'closed'
       AND merged_at > NOW() - INTERVAL '${hrs} hours'
     ORDER BY merged_at DESC
     LIMIT 20
@@ -121,9 +121,9 @@ export function fetchRecentCommits(
   return coral.query(`
     SELECT sha, message, author_name, author_email, committer_date, html_url
     FROM github.commits
-    WHERE owner = '${esc(owner)}'
-      AND repo  = '${esc(repo)}'
-      AND ref   = 'main'
+    WHERE owner          = '${esc(owner)}'
+      AND repo           = '${esc(repo)}'
+      AND ref            = 'main'
       AND committer_date > NOW() - INTERVAL '${hrs} hours'
     ORDER BY committer_date DESC
     LIMIT 30
@@ -148,8 +148,8 @@ export function fetchFailedWorkflows(owner: string, repo: string): Promise<Coral
 
 export function fetchThirdPartyIncidents(): Promise<CoralQueryResult> {
   return coral.query(`
-    SELECT id, service_name, title, status, impact, started_at, updated_at,
-           url, affected_components
+    SELECT id, service_name, title, status, impact,
+           started_at, updated_at, url, affected_components
     FROM statusgator.incidents
     WHERE status != 'resolved'
     ORDER BY started_at DESC
@@ -160,8 +160,8 @@ export function fetchThirdPartyIncidents(): Promise<CoralQueryResult> {
 export function fetchRecentThirdPartyIncidents(windowHours = 24): Promise<CoralQueryResult> {
   const hrs = Math.min(Math.max(Math.floor(windowHours), 1), 168);
   return coral.query(`
-    SELECT id, service_name, title, status, impact, started_at, resolved_at,
-           url, affected_components
+    SELECT id, service_name, title, status, impact,
+           started_at, resolved_at, url, affected_components
     FROM statusgator.incidents
     WHERE started_at > NOW() - INTERVAL '${hrs} hours'
     ORDER BY started_at DESC
@@ -179,33 +179,8 @@ export function fetchServiceComponentStatus(): Promise<CoralQueryResult> {
   `);
 }
 
-// ─── Cross-source correlation ─────────────────────────────────────────────────
-
-export function correlateIncidentsWithMonitors(): Promise<CoralQueryResult> {
-  return coral.query(`
-    SELECT
-      p.id          AS pd_incident_id,
-      p.title       AS pd_title,
-      p.service     AS pd_service,
-      p.started_at,
-      p.urgency,
-      d.name        AS monitor_name,
-      d.status      AS monitor_status,
-      d.tags        AS monitor_tags
-    FROM pagerduty.incidents p
-    LEFT JOIN datadog.monitors d
-      ON d.tags LIKE '%service:' || p.service || '%'
-    WHERE p.status IN ('triggered', 'acknowledged')
-      AND p.urgency = 'high'
-      AND d.overall_state IN ('Alert', 'Warn')
-    ORDER BY p.started_at DESC
-    LIMIT 20
-  `);
-}
-
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/** Escape single quotes for SQL string interpolation */
 function esc(value: string): string {
   return value.replace(/'/g, "''");
 }

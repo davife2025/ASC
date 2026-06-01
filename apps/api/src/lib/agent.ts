@@ -4,10 +4,10 @@ import { resolveGitHubRepo } from '../config/services.js';
 import {
   fetchIncidentDetail,
   fetchIncidentLogEntries,
-  fetchFiringMonitors,
-  fetchRecentDatadogEvents,
-  fetchServiceHealth,
-  fetchDatadogIncidents,
+  fetchFiringAlertRules,
+  fetchRecentAlertAnnotations,
+  fetchAllAlertRules,
+  fetchDatasources,
   fetchRecentMergedPRs,
   fetchFailedWorkflows,
   fetchThirdPartyIncidents,
@@ -29,21 +29,20 @@ export async function runInvestigation(investigationId: string): Promise<void> {
 
     if (invErr) throw new Error(`Investigation not found: ${invErr.message}`);
 
-    const incident = investigation.incidents as Record<string, unknown>;
+    const incident    = investigation.incidents as Record<string, unknown>;
     const pagerdutyId = String(incident.pagerduty_id);
     const serviceName = String(incident.service_name ?? '');
-    const ghRepo = resolveGitHubRepo(serviceName);
+    const ghRepo      = resolveGitHubRepo(serviceName);
 
     console.log(`[agent] fetching Coral sources for ${pagerdutyId}`);
 
-    // FIX: use named tuple instead of spread rest to avoid fragile index access
     const [
       incidentDetailResult,
       logEntriesResult,
-      firingMonitorsResult,
-      datadogEventsResult,
-      serviceHealthResult,
-      datadogIncidentsResult,
+      firingAlertRulesResult,
+      alertAnnotationsResult,
+      allAlertRulesResult,
+      datasourcesResult,
       thirdPartyIncidentsResult,
       thirdPartyComponentsResult,
       recentPRsResult,
@@ -51,35 +50,39 @@ export async function runInvestigation(investigationId: string): Promise<void> {
     ] = await Promise.allSettled([
       fetchIncidentDetail(pagerdutyId),
       fetchIncidentLogEntries(pagerdutyId),
-      fetchFiringMonitors(),
-      fetchRecentDatadogEvents(180),
-      fetchServiceHealth(),
-      fetchDatadogIncidents(),
+      fetchFiringAlertRules(),
+      fetchRecentAlertAnnotations(180),
+      fetchAllAlertRules(),
+      fetchDatasources(),
       fetchThirdPartyIncidents(),
       fetchServiceComponentStatus(),
-      ghRepo ? fetchRecentMergedPRs(ghRepo.owner, ghRepo.repo, 6) : Promise.resolve({ rows: [], columns: [], row_count: 0, execution_ms: 0 }),
-      ghRepo ? fetchFailedWorkflows(ghRepo.owner, ghRepo.repo) : Promise.resolve({ rows: [], columns: [], row_count: 0, execution_ms: 0 }),
+      ghRepo
+        ? fetchRecentMergedPRs(ghRepo.owner, ghRepo.repo, 6)
+        : Promise.resolve({ rows: [], columns: [], row_count: 0, execution_ms: 0 }),
+      ghRepo
+        ? fetchFailedWorkflows(ghRepo.owner, ghRepo.repo)
+        : Promise.resolve({ rows: [], columns: [], row_count: 0, execution_ms: 0 }),
     ]);
 
     const raw = {
-      incident:            extract(incidentDetailResult)?.[0] ?? incident,
-      logEntries:          extract(logEntriesResult) ?? [],
-      firingMonitors:      extract(firingMonitorsResult) ?? [],
-      datadogEvents:       extract(datadogEventsResult) ?? [],
-      serviceHealth:       extract(serviceHealthResult) ?? [],
-      datadogIncidents:    extract(datadogIncidentsResult) ?? [],
-      thirdPartyIncidents: extract(thirdPartyIncidentsResult) ?? [],
-      thirdPartyComponents:extract(thirdPartyComponentsResult) ?? [],
-      recentPRs:           extract(recentPRsResult) ?? [],
-      failedWorkflows:     extract(failedWorkflowsResult) ?? [],
+      incident:             extract(incidentDetailResult)?.[0] ?? incident,
+      logEntries:           extract(logEntriesResult)           ?? [],
+      firingAlertRules:     extract(firingAlertRulesResult)     ?? [],
+      alertAnnotations:     extract(alertAnnotationsResult)     ?? [],
+      allAlertRules:        extract(allAlertRulesResult)        ?? [],
+      datasources:          extract(datasourcesResult)          ?? [],
+      thirdPartyIncidents:  extract(thirdPartyIncidentsResult)  ?? [],
+      thirdPartyComponents: extract(thirdPartyComponentsResult) ?? [],
+      recentPRs:            extract(recentPRsResult)            ?? [],
+      failedWorkflows:      extract(failedWorkflowsResult)      ?? [],
     };
 
     console.log('[agent] coral data:', {
-      logEntries:          raw.logEntries.length,
-      firingMonitors:      raw.firingMonitors.length,
-      datadogEvents:       raw.datadogEvents.length,
-      recentPRs:           raw.recentPRs.length,
-      thirdPartyIncidents: raw.thirdPartyIncidents.length,
+      logEntries:       raw.logEntries.length,
+      firingAlerts:     raw.firingAlertRules.length,
+      annotations:      raw.alertAnnotations.length,
+      recentPRs:        raw.recentPRs.length,
+      thirdParty:       raw.thirdPartyIncidents.length,
     });
 
     const summary = await generateSummary(raw);
@@ -92,7 +95,12 @@ export async function runInvestigation(investigationId: string): Promise<void> {
         summary,
         raw_data: {
           pagerduty:   { incident: raw.incident, log_entries: raw.logEntries },
-          datadog:     { monitors: raw.firingMonitors, events: raw.datadogEvents, service_health: raw.serviceHealth, incidents: raw.datadogIncidents },
+          grafana:     {
+            firing_alert_rules: raw.firingAlertRules,
+            annotations:        raw.alertAnnotations,
+            all_alert_rules:    raw.allAlertRules,
+            datasources:        raw.datasources,
+          },
           github:      { prs: raw.recentPRs, workflows: raw.failedWorkflows },
           statusgator: { incidents: raw.thirdPartyIncidents, components: raw.thirdPartyComponents },
         },
@@ -109,12 +117,9 @@ export async function runInvestigation(investigationId: string): Promise<void> {
 
 async function generateSummary(raw: Parameters<typeof buildUserPrompt>[0]): Promise<IncidentSummary> {
   const userPrompt = buildUserPrompt(raw);
-
-  // FIX: guard against huge prompts — Kimi K2 context limit is ~128k tokens
-  // rough estimate: 1 token ≈ 4 chars
   const estimatedTokens = (SYSTEM_PROMPT.length + userPrompt.length) / 4;
   if (estimatedTokens > 100_000) {
-    console.warn(`[agent] prompt estimated at ~${Math.round(estimatedTokens)} tokens — truncation may occur`);
+    console.warn(`[agent] prompt ~${Math.round(estimatedTokens)} tokens — may be truncated`);
   }
 
   const text = await chatCompletion({
@@ -122,12 +127,11 @@ async function generateSummary(raw: Parameters<typeof buildUserPrompt>[0]): Prom
       { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user',   content: userPrompt },
     ],
-    maxTokens: 2048,
+    maxTokens:   2048,
     temperature: 0.1,
   });
 
   const clean = text.replace(/^```json\s*/i, '').replace(/\s*```$/, '').trim();
-
   try {
     return JSON.parse(clean) as IncidentSummary;
   } catch {

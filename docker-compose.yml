@@ -12,30 +12,23 @@ services:
       PORT: 3001
       WEB_ORIGIN: http://localhost:3000
 
-      # Supabase
       SUPABASE_URL: ${SUPABASE_URL}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
 
-      # HuggingFace (Kimi K2)
       HF_TOKEN: ${HF_TOKEN}
 
-      # Coral sources (read by coral source add + at query time)
       PAGERDUTY_API_TOKEN: ${PAGERDUTY_API_TOKEN}
-      DD_API_KEY: ${DD_API_KEY}
-      DD_APPLICATION_KEY: ${DD_APPLICATION_KEY}
-      DD_SITE: ${DD_SITE:-datadoghq.com}
+      GRAFANA_URL: ${GRAFANA_URL}
+      GRAFANA_TOKEN: ${GRAFANA_TOKEN}
       GITHUB_TOKEN: ${GITHUB_TOKEN}
       STATUSGATOR_API_TOKEN: ${STATUSGATOR_API_TOKEN}
 
-      # Coral config dir — persists source registrations across container restarts
       CORAL_CONFIG_DIR: /home/node/.coral
 
-      # Optional
       PAGERDUTY_WEBHOOK_SECRET: ${PAGERDUTY_WEBHOOK_SECRET:-}
       SERVICE_MAP_JSON: ${SERVICE_MAP_JSON:-}
 
     volumes:
-      # Named volume so `coral source add` registrations survive restarts
       - coral-config:/home/node/.coral
 
     restart: unless-stopped
@@ -63,4 +56,3 @@ services:
 
 volumes:
   coral-config:
-    # Persists Coral source registrations + secrets between container restarts

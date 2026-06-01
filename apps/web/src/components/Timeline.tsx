@@ -2,14 +2,14 @@ import type { TimelineEvent } from '@sre/types';
 
 const sourceColors: Record<TimelineEvent['source'], string> = {
   pagerduty:  'bg-green-500',
-  datadog:    'bg-purple-500',
+  grafana:    'bg-orange-500',
   github:     'bg-gray-400',
   statusgator:'bg-blue-500',
 };
 
 const sourceLabels: Record<TimelineEvent['source'], string> = {
   pagerduty:   'PD',
-  datadog:     'DD',
+  grafana:     'GR',
   github:      'GH',
   statusgator: 'SG',
 };

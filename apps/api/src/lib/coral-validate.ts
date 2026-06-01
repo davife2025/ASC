@@ -1,17 +1,16 @@
 import { coral } from './coral.js';
+import { env } from '../config/env.js';
 
-// Expected tables per source (confirmed against withcoral.com/docs/reference/bundled-sources)
 const EXPECTED: Record<string, string[]> = {
   pagerduty:   ['incidents', 'log_entries', 'change_events'],
-  datadog:     ['monitors', 'events', 'incidents'],
+  grafana:     ['alert_rules', 'annotations', 'datasources'],
   github:      ['pulls', 'commits', 'workflow_runs'],
   statusgator: ['incidents', 'service_components'],
 };
 
 export async function validateCoralSchema(): Promise<void> {
-  // Skip entirely if coral is not enabled (e.g. local dev without coral installed)
-  if (!process.env.CORAL_ENABLED || process.env.CORAL_ENABLED === 'false') {
-    console.log('[coral-validate] skipped — set CORAL_ENABLED=true to enable');
+  if (env.coralEnabled === false) {
+    console.log('[coral-validate] skipped (CORAL_ENABLED=false)');
     return;
   }
 
@@ -22,7 +21,6 @@ export async function validateCoralSchema(): Promise<void> {
   try {
     items = await coral.listCatalog();
   } catch (err) {
-    // Fallback: try via SQL (works once sources are added)
     try {
       const result = await coral.query(
         `SELECT schema_name AS schema, table_name AS table, 'table' AS kind
@@ -31,7 +29,10 @@ export async function validateCoralSchema(): Promise<void> {
       items = result.rows as Array<{ schema: string; table: string; kind: string }>;
     } catch {
       console.warn('[coral-validate] could not reach Coral — skipping schema check');
-      console.warn('[coral-validate] error:', err);
+      if (err instanceof Error) {
+        // Print just the first line of the error to keep logs clean
+        console.warn('[coral-validate]', err.message.split('\n')[0]);
+      }
       return;
     }
   }
@@ -41,25 +42,20 @@ export async function validateCoralSchema(): Promise<void> {
     return;
   }
 
-  // Build set of "schema.table" from actual catalog
-  const actual = new Set(items.map((r) => `${r.schema}.${r.table}`));
-  const missing: string[] = [];
-
-  for (const [schema, tables] of Object.entries(EXPECTED)) {
-    for (const table of tables) {
-      if (!actual.has(`${schema}.${table}`)) missing.push(`${schema}.${table}`);
-    }
-  }
+  const actual  = new Set(items.map((r) => `${r.schema}.${r.table}`));
+  const missing = Object.entries(EXPECTED)
+    .flatMap(([schema, tables]) => tables.map((t) => `${schema}.${t}`))
+    .filter((key) => !actual.has(key));
 
   const total = Object.values(EXPECTED).flat().length;
 
   if (missing.length === 0) {
-    console.log(`[coral-validate] ✓ all ${total} expected tables present (${items.length} total in catalog)`);
+    console.log(`[coral-validate] ✓ all ${total} expected tables present (${items.length} total)`);
   } else {
     console.warn(
-      `[coral-validate] ⚠ ${missing.length}/${total} expected tables missing:\n` +
+      `[coral-validate] ⚠ ${missing.length}/${total} tables missing:\n` +
         missing.map((t) => `  - ${t}`).join('\n'),
     );
-    console.warn('[coral-validate] run `pnpm setup:coral` if sources are not yet registered');
+    console.warn('[coral-validate] run `pnpm setup:coral` if sources are not registered yet');
   }
 }
