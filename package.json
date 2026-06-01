@@ -4,6 +4,7 @@
   "scripts": {
     "dev": "turbo run dev",
     "build": "turbo run build",
+    "start": "node apps/api/dist/index.js",
     "lint": "turbo run lint",
     "type-check": "turbo run type-check",
     "setup:coral": "pnpm --filter @sre/api setup:coral",
